@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/qanta-agent
+  IMAGE_NAME: ghcr.io/arkxero/qanta-agent
 
 jobs:
   publish:
