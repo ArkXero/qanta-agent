@@ -15,16 +15,22 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("pyarrow required. Run: uv run --with pyarrow scripts/build_index.py") from exc
 
 
+QANTA_SPLITS = (
+    "guesstrain",
+    "guesstest",
+    "buzztrain",
+    "buzztest",
+    "guessdev",
+    "buzzdev",
+    "adversarial",
+)
+
 QANTA_FILES = [
-    ("community-datasets/qanta", "mode=full,char_skip=25/guesstrain-00000-of-00001.parquet"),
-    ("community-datasets/qanta", "mode=full,char_skip=25/guesstest-00000-of-00001.parquet"),
-    ("community-datasets/qanta", "mode=full,char_skip=25/buzztrain-00000-of-00001.parquet"),
-    ("community-datasets/qanta", "mode=full,char_skip=25/buzztest-00000-of-00001.parquet"),
-    ("community-datasets/qanta", "mode=full,char_skip=25/guessdev-00000-of-00001.parquet"),
-    ("community-datasets/qanta", "mode=full,char_skip=25/buzzdev-00000-of-00001.parquet"),
-    ("community-datasets/qanta", "mode=full,char_skip=25/adversarial-00000-of-00001.parquet"),
-    ("mgor/protobowl-11-13", "questions/eval-00000-of-00001.parquet"),
+    ("community-datasets/qanta", f"mode={mode},char_skip=25/{split}-00000-of-00001.parquet")
+    for mode in ("full", "first")
+    for split in QANTA_SPLITS
 ]
+QANTA_FILES.append(("mgor/protobowl-11-13", "questions/eval-00000-of-00001.parquet"))
 
 
 def hf_resolve_url(repo: str, path: str) -> str:
@@ -45,17 +51,21 @@ def download(url: str, target: Path) -> None:
 
 def row_docs(path: Path) -> Iterable[dict]:
     pf = pq.ParquetFile(path)
+    prefer_text = "mode=first" in str(path)
     for batch in pf.iter_batches(batch_size=2048):
         table = batch.to_pylist()
         for row in table:
             if "full_question" in row:
-                question = row.get("full_question") or row.get("text") or ""
+                if prefer_text:
+                    question = row.get("text") or row.get("first_sentence") or row.get("full_question") or ""
+                else:
+                    question = row.get("full_question") or row.get("text") or ""
                 answer = row.get("answer") or row.get("page") or ""
                 raw = row.get("raw_answer") or answer
                 qid = str(row.get("qanta_id") or row.get("id") or "")
                 first = row.get("first_sentence") or ""
                 category = row.get("category") or ""
-                source = row.get("fold") or path.stem
+                source = f"{row.get('fold') or path.stem}:{path.parent.name}"
             else:
                 question = row.get("question") or ""
                 answer = row.get("answer_primary") or row.get("wiki_page") or row.get("answer") or ""
