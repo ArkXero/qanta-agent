@@ -17,7 +17,9 @@ except ImportError as exc:  # pragma: no cover
 
 QANTA_FILES = [
     ("community-datasets/qanta", "mode=full,char_skip=25/guesstrain-00000-of-00001.parquet"),
+    ("community-datasets/qanta", "mode=full,char_skip=25/guesstest-00000-of-00001.parquet"),
     ("community-datasets/qanta", "mode=full,char_skip=25/buzztrain-00000-of-00001.parquet"),
+    ("community-datasets/qanta", "mode=full,char_skip=25/buzztest-00000-of-00001.parquet"),
     ("community-datasets/qanta", "mode=full,char_skip=25/guessdev-00000-of-00001.parquet"),
     ("community-datasets/qanta", "mode=full,char_skip=25/buzzdev-00000-of-00001.parquet"),
     ("community-datasets/qanta", "mode=full,char_skip=25/adversarial-00000-of-00001.parquet"),

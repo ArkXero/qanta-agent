@@ -131,6 +131,17 @@ class RetrievalHit:
     confidence: float
 
 
+@dataclass
+class _AnswerGroup:
+    answer: str
+    raw_answer: str
+    question: str
+    category: str
+    top_score: float
+    total_score: float
+    count: int
+
+
 class QuizbowlRetriever:
     def __init__(self, index_path: Path | None = None) -> None:
         self.index_path = index_path or _first_existing(DEFAULT_INDEX_PATHS)
@@ -146,11 +157,12 @@ class QuizbowlRetriever:
         cleaned = clean_text(text)
         if not query_terms(cleaned):
             return []
-        rows = []
+        rows_by_id: dict[int, sqlite3.Row] = {}
         for q in fts_queries(cleaned):
             rows = self.conn.execute(
                 """
                 SELECT
+                    docs.id,
                     docs.answer,
                     docs.raw_answer,
                     docs.full_question,
@@ -162,34 +174,75 @@ class QuizbowlRetriever:
                 ORDER BY rank
                 LIMIT ?
                 """,
-                (q, limit),
+                (q, max(limit * 8, 30)),
             ).fetchall()
-            if rows:
-                break
-        if not rows:
+            for row in rows:
+                rows_by_id.setdefault(int(row["id"]), row)
+        if not rows_by_id:
             return []
 
-        ranks = [float(row["rank"]) for row in rows]
-        best = -ranks[0]
-        second = -ranks[1] if len(ranks) > 1 else best - 1.5
-        gap = max(0.0, best - second)
-        n_tokens = len(re.findall(r"\w+", cleaned))
-        late_bonus = 0.14 if re.search(r"\bfor\s+10\s+points\b|\bname\s+this\b|\bidentify\s+this\b", cleaned, re.I) else 0.0
-        length_bonus = min(0.18, max(0.0, (n_tokens - 18) / 160))
-        base_conf = 0.24 + 0.35 * math.tanh(best / 7.5) + 0.22 * math.tanh(gap / 2.5)
-        confidence = max(0.04, min(0.97, base_conf + length_bonus + late_bonus))
-
-        hits: list[RetrievalHit] = []
-        for i, row in enumerate(rows):
-            row_score = -float(row["rank"])
-            row_conf = confidence if i == 0 else max(0.03, confidence - 0.12 - 0.04 * i)
-            hits.append(
-                RetrievalHit(
-                    answer=display_answer(row["answer"], row["raw_answer"]),
+        groups: dict[str, _AnswerGroup] = {}
+        for row in rows_by_id.values():
+            answer = display_answer(row["answer"], row["raw_answer"])
+            key = normalize_answer(answer)
+            if not key:
+                continue
+            score = -float(row["rank"])
+            existing = groups.get(key)
+            if existing is None:
+                groups[key] = _AnswerGroup(
+                    answer=answer,
                     raw_answer=row["raw_answer"] or "",
                     question=row["full_question"] or "",
                     category=row["category"] or "",
-                    score=row_score,
+                    top_score=score,
+                    total_score=max(score, 0.0),
+                    count=1,
+                )
+            else:
+                existing.total_score += max(score, 0.0)
+                existing.count += 1
+                if score > existing.top_score:
+                    existing.answer = answer
+                    existing.raw_answer = row["raw_answer"] or ""
+                    existing.question = row["full_question"] or ""
+                    existing.category = row["category"] or ""
+                    existing.top_score = score
+        if not groups:
+            return []
+
+        ranked = sorted(
+            groups.values(),
+            key=lambda g: g.top_score + 0.16 * math.log1p(g.total_score) + 0.12 * math.log1p(g.count),
+            reverse=True,
+        )
+        best_group = ranked[0]
+        best_value = best_group.top_score + 0.16 * math.log1p(best_group.total_score) + 0.12 * math.log1p(best_group.count)
+        second_value = (
+            ranked[1].top_score + 0.16 * math.log1p(ranked[1].total_score) + 0.12 * math.log1p(ranked[1].count)
+            if len(ranked) > 1
+            else best_value - 1.5
+        )
+        best = best_group.top_score
+        gap = max(0.0, best_value - second_value)
+        n_tokens = len(re.findall(r"\w+", cleaned))
+        late_bonus = 0.14 if re.search(r"\bfor\s+10\s+points\b|\bname\s+this\b|\bidentify\s+this\b", cleaned, re.I) else 0.0
+        length_bonus = min(0.18, max(0.0, (n_tokens - 18) / 160))
+        support_bonus = min(0.08, 0.025 * math.log1p(best_group.count))
+        base_conf = 0.23 + 0.34 * math.tanh(best / 7.5) + 0.23 * math.tanh(gap / 2.5)
+        confidence = max(0.04, min(0.97, base_conf + length_bonus + late_bonus))
+        confidence = max(0.04, min(0.97, confidence + support_bonus))
+
+        hits: list[RetrievalHit] = []
+        for i, group in enumerate(ranked[:limit]):
+            row_conf = confidence if i == 0 else max(0.03, confidence - 0.12 - 0.04 * i)
+            hits.append(
+                RetrievalHit(
+                    answer=group.answer,
+                    raw_answer=group.raw_answer,
+                    question=group.question,
+                    category=group.category,
+                    score=group.top_score,
                     confidence=row_conf,
                 )
             )
